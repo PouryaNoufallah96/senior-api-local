@@ -1,0 +1,135 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/db/generated"
+}
+
+model Organization {
+  id           String   @id @default(cuid())
+  // Kinde organization code (`org_code` claim). The trusted tenant key.
+  kindeOrgCode String   @unique
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships OrganizationMembership[]
+  projects    Project[]
+  issues      Issue[]
+  comments    Comment[]
+}
+
+model User {
+  id          String   @id @default(cuid())
+  // Kinde user id (`sub` claim, e.g. kp_...).
+  kindeUserId String   @unique
+  email       String?
+  name        String?
+  avatarUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships     OrganizationMembership[]
+  createdProjects Project[]                @relation("ProjectCreator")
+  ledProjects     Project[]                @relation("ProjectLead")
+  createdIssues   Issue[]                  @relation("IssueCreator")
+  assignedIssues  Issue[]                  @relation("IssueAssignee")
+  comments        Comment[]
+}
+
+// Records that a user has been seen inside an organization with a verified
+// Kinde session. Used to list assignable members and to validate assignees.
+model OrganizationMembership {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  // Snapshot of Kinde role keys carried by the last verified access token.
+  roleKeys       String   @default("[]")
+  createdAt      DateTime @default(now())
+  lastSeenAt     DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Project {
+  id             String    @id @default(cuid())
+  organizationId String
+  // Short uppercase identifier prefix for issues (e.g. ENG -> ENG-42).
+  key            String
+  name           String
+  description    String?
+  // ACTIVE | ARCHIVED
+  status         String    @default("ACTIVE")
+  leadId         String?
+  createdById    String
+  // Monotonic per-project counter used to allocate issue numbers.
+  issueCounter   Int       @default(0)
+  // Optimistic concurrency token.
+  archivedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lead         User?        @relation("ProjectLead", fields: [leadId], references: [id], onDelete: SetNull)
+  createdBy    User         @relation("ProjectCreator", fields: [createdById], references: [id])
+  issues       Issue[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId, status, createdAt, id])
+}
+
+model Issue {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  // Per-project sequential number (ENG-42 -> 42).
+  number         Int
+  title          String
+  description    String?
+  // BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED
+  status         String    @default("BACKLOG")
+  // NONE | URGENT | HIGH | MEDIUM | LOW
+  priority       String    @default("NONE")
+  assigneeId     String?
+  createdById    String
+  dueDate        DateTime?
+  // Optimistic concurrency token.
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("IssueAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  createdBy    User         @relation("IssueCreator", fields: [createdById], references: [id])
+  comments     Comment[]
+
+  @@unique([projectId, number])
+  @@index([organizationId, createdAt, id])
+  @@index([projectId, createdAt, id])
+  @@index([organizationId, assigneeId])
+  @@index([organizationId, status])
+}
+
+model Comment {
+  id             String    @id @default(cuid())
+  // Denormalised tenant key so ownership checks never need a join.
+  organizationId String
+  issueId        String
+  authorId       String
+  body           String
+  editedAt       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  issue        Issue        @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author       User         @relation(fields: [authorId], references: [id])
+
+  @@index([issueId, createdAt, id])
+}
